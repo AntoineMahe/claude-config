@@ -1,0 +1,110 @@
+# AppArmor profile for Claude Code CLI
+# Minimal strict-enforce: broad dev access with targeted denies
+#
+# Claude Code is a dev tool that needs wide filesystem access.
+# This profile adds a kernel-enforced layer on top of Claude's own
+# settings.json deny rules — which Claude can modify, but AppArmor it cannot.
+#
+# Install: sudo cp apparmor/claude-code /etc/apparmor.d/claude-code
+#          sudo apparmor_parser -r /etc/apparmor.d/claude-code
+# Remove:  sudo apparmor_parser -R /etc/apparmor.d/claude-code
+#          sudo rm /etc/apparmor.d/claude-code
+# Debug:   sudo aa-complain /etc/apparmor.d/claude-code
+#          journalctl -k | grep DENIED
+
+abi <abi/4.0>,
+
+include <tunables/global>
+
+profile claude-code @{HOME}/.local/share/claude/versions/* flags=(enforce) {
+  include <abstractions/base>
+  include <abstractions/nameservice>
+
+  # =============================================================
+  # DENY RULES (always win over allow rules)
+  # =============================================================
+
+  # --- Universal: system-level secrets ---
+  deny @{HOME}/.ssh/** rwlk,
+  deny @{HOME}/.gnupg/** rwlk,
+  deny @{HOME}/.local/share/keyrings/** rwlk,
+  deny @{HOME}/.bash_history rwlk,
+
+  # --- Per-machine: customize these for your setup ---
+  # deny @{HOME}/Documents/finances/** rwlk,
+  # deny @{HOME}/private/** rwlk,
+  # deny @{HOME}/.config/some-app/** rwlk,
+  include if exists <local/claude-code>
+
+  # --- No privilege escalation ---
+  deny /usr/bin/sudo x,
+  deny /usr/bin/su x,
+  deny /usr/bin/pkexec x,
+  deny /usr/sbin/aa-* x,
+  deny /usr/sbin/apparmor_parser x,
+
+  # =============================================================
+  # CLAUDE CODE RUNTIME
+  # =============================================================
+
+  # Binary and install directory
+  @{HOME}/.local/share/claude/** r,
+  @{HOME}/.local/share/claude/versions/* mr,
+  @{HOME}/.local/bin/claude r,
+
+  # Claude config (settings, history, credentials, memory, tasks)
+  @{HOME}/.claude/ r,
+  @{HOME}/.claude/** rwk,
+
+  # Process info (memory stats, etc.)
+  @{PROC}/@{pid}/** r,
+  @{PROC}/sys/** r,
+
+  # =============================================================
+  # BROAD DEV ACCESS
+  # =============================================================
+
+  # Read: entire filesystem (DAC permissions still apply)
+  / r,
+  /** r,
+
+  # Write: user-owned files in home + tmp
+  owner @{HOME}/** w,
+  /tmp/** rwk,
+  /tmp/ r,
+
+  # Execute: common dev tools — inherit this profile
+  /usr/bin/** ix,
+  /usr/local/bin/** ix,
+  /bin/** ix,
+  /snap/bin/** ix,
+  @{HOME}/.local/bin/** ix,
+  @{HOME}/.cargo/bin/** ix,
+  @{HOME}/.nvm/**/bin/** ix,
+  @{HOME}/.local/share/pnpm/** ix,
+
+  # =============================================================
+  # NETWORK (Anthropic API, git, docker, etc.)
+  # =============================================================
+
+  network inet stream,
+  network inet6 stream,
+  network inet dgram,
+  network inet6 dgram,
+  network unix stream,
+  network unix dgram,
+
+  # =============================================================
+  # DEVICES & LIBRARIES
+  # =============================================================
+
+  /dev/null rw,
+  /dev/urandom r,
+  /dev/random r,
+  /dev/tty rw,
+  /dev/pts/* rw,
+
+  /usr/lib/** rm,
+  /lib/** rm,
+  /lib64/** rm,
+}

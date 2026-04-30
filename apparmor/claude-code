@@ -73,15 +73,19 @@ profile claude-code @{HOME}/.local/share/claude/versions/* flags=(enforce) {
   /tmp/** rwk,
   /tmp/ r,
 
-  # Execute: common dev tools — inherit this profile
+  # Execute: common dev tools — inherit this profile.
+  # The HOME rule is owner-scoped, so files dropped by another user are still
+  # blocked. It covers ephemeral tool environments that a narrow allowlist
+  # cannot anticipate: pre-commit's ~/.cache/pre-commit/repo*/{py,node,ruby}_env-*,
+  # project .venv/.tox, node_modules/.bin, pyenv/uv/pipx/nvm/pnpm/cargo,
+  # docker CLI plugins under ~/.docker/cli-plugins, etc.
   /usr/bin/** ix,
   /usr/local/bin/** ix,
   /bin/** ix,
   /snap/bin/** ix,
-  @{HOME}/.local/bin/** ix,
-  @{HOME}/.cargo/bin/** ix,
-  @{HOME}/.nvm/**/bin/** ix,
-  @{HOME}/.local/share/pnpm/** ix,
+  /opt/** ix,
+  /usr/libexec/** ix,
+  owner @{HOME}/** ix,
 
   # =============================================================
   # NETWORK (Anthropic API, git, docker, etc.)
@@ -103,6 +107,12 @@ profile claude-code @{HOME}/.local/share/claude/versions/* flags=(enforce) {
   /dev/random r,
   /dev/tty rw,
   /dev/pts/* rw,
+
+  # Container runtime sockets (CLI -> daemon).
+  # AppArmor mediates unix socket connect() as a write on the socket path,
+  # so the network rules above are not enough on their own.
+  /{var/,}run/docker.sock rw,
+  /{var/,}run/podman/podman.sock rw,
 
   /usr/lib/** rm,
   /lib/** rm,

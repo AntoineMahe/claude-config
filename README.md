@@ -51,6 +51,32 @@ Then reload:
 sudo apparmor_parser -r /etc/apparmor.d/claude-code
 ```
 
+## Practical exec & socket access
+
+The profile is `enforce`d on Claude *and* on every process Claude `exec`s
+(`ix` = inherit-execute). That means dev tools running under Claude live inside
+the same sandbox, which has two practical consequences worth calling out:
+
+- **Ephemeral tool environments.** Tools like `pre-commit` build per-hook
+  envs under `~/.cache/pre-commit/repo*/py_env-*/bin/`, `node_env-*/bin/`,
+  etc., and exec binaries from there. Project `.venv`, `.tox`, and
+  `node_modules/.bin` follow the same pattern. A narrow execute allowlist
+  cannot anticipate these paths, so the profile permits `owner @{HOME}/** ix`
+  — Claude can exec any file in HOME that your user owns. Combined with the
+  `deny`s on `sudo`/`su`/`pkexec`/`aa-*`, this preserves the no-escalation
+  guarantee while letting normal dev tooling work.
+
+  *Caveat:* code trees outside HOME (e.g. `/srv/...`, `/mnt/...`) are not
+  covered. Add a per-machine `owner /srv/myproj/** ix,` rule in
+  `/etc/apparmor.d/local/claude-code` if you need it.
+
+- **Container runtime sockets.** `docker` and `podman` CLIs talk to their
+  daemons over a unix socket, which AppArmor mediates as a write on the
+  socket path. The profile explicitly allows
+  `/{var/,}run/docker.sock rw,` and `/{var/,}run/podman/podman.sock rw,`
+  — only the socket nodes themselves, not all of `/run`. The container
+  daemon runs under its own profile (`docker-default`) and is unaffected.
+
 ## Debugging
 
 ```bash

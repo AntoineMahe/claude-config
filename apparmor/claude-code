@@ -70,7 +70,7 @@ profile claude-code @{HOME}/.local/share/claude/versions/* flags=(enforce) {
 
   # Write: user-owned files in home + tmp
   owner @{HOME}/** w,
-  /tmp/** rwk,
+  /tmp/** rwkl,
   /tmp/ r,
 
   # Execute: common dev tools — inherit this profile.

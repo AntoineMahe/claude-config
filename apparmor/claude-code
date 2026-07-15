@@ -108,6 +108,16 @@ profile claude-code @{HOME}/.local/share/claude/versions/* flags=(enforce) {
   /dev/tty rw,
   /dev/pts/* rw,
 
+  # Nvidia GPU device nodes (nvidia-smi, CUDA, NVML-based tools).
+  # Without these, NVML fails with an opaque "Unknown Error" rather
+  # than a permission message, which is what made this hard to spot.
+  /dev/nvidiactl rw,
+  /dev/nvidia-uvm rw,
+  /dev/nvidia-uvm-tools rw,
+  /dev/nvidia-modeset rw,
+  /dev/nvidia[0-9]* rw,
+  /dev/nvidia-caps/* r,
+
   # Container runtime sockets (CLI -> daemon).
   # AppArmor mediates unix socket connect() as a write on the socket path,
   # so the network rules above are not enough on their own.

@@ -1,0 +1,131 @@
+# AppArmor profile for pi coding agent CLI
+# Mirrors the claude-code profile: broad dev access with targeted denies.
+#
+# pi is a Node.js CLI (shebang script -> node), not a standalone ELF like
+# claude-code, but AppArmor attaches based on the originally exec'd path
+# (bin/pi), so confinement holds through the env -> node re-exec chain.
+#
+# Install: sudo cp apparmor/pi /etc/apparmor.d/pi
+#          sudo apparmor_parser -r /etc/apparmor.d/pi
+# Remove:  sudo apparmor_parser -R /etc/apparmor.d/pi
+#          sudo rm /etc/apparmor.d/pi
+# Debug:   sudo aa-complain /etc/apparmor.d/pi
+#          journalctl -k | grep DENIED
+
+abi <abi/4.0>,
+
+include <tunables/global>
+
+profile pi @{HOME}/.local/share/pi-node/*/bin/pi flags=(enforce) {
+  include <abstractions/base>
+  include <abstractions/nameservice>
+
+  # =============================================================
+  # DENY RULES (always win over allow rules)
+  # =============================================================
+
+  # --- Universal: system-level secrets ---
+  deny @{HOME}/.ssh/** rwlk,
+  deny @{HOME}/.gnupg/** rwlk,
+  deny @{HOME}/.local/share/keyrings/** rwlk,
+  deny @{HOME}/.bash_history rwlk,
+
+  # --- Per-machine: customize these for your setup ---
+  # deny @{HOME}/Documents/finances/** rwlk,
+  # deny @{HOME}/private/** rwlk,
+  # deny @{HOME}/.config/some-app/** rwlk,
+  include if exists <local/pi>
+
+  # --- No privilege escalation ---
+  deny /usr/bin/sudo x,
+  deny /usr/bin/su x,
+  deny /usr/bin/pkexec x,
+  deny /usr/sbin/aa-* x,
+  deny /usr/sbin/apparmor_parser x,
+
+  # =============================================================
+  # PI RUNTIME
+  # =============================================================
+
+  # Node runtime + pi package install (bin/pi, bin/node, cli.js, deps)
+  @{HOME}/.local/share/pi-node/** r,
+  @{HOME}/.local/share/pi-node/*/bin/* mrix,
+  @{HOME}/.local/share/pi-node/*/lib/node_modules/** mr,
+
+  # pi config (settings, auth, sessions, models.json, bundled fd/rg)
+  @{HOME}/.pi/ r,
+  @{HOME}/.pi/** rwk,
+  @{HOME}/.pi/agent/bin/* mrix,
+
+  # Process info (memory stats, etc.)
+  @{PROC}/@{pid}/** r,
+  @{PROC}/sys/** r,
+
+  # =============================================================
+  # BROAD DEV ACCESS
+  # =============================================================
+
+  # Read: entire filesystem (DAC permissions still apply)
+  / r,
+  /** r,
+
+  # Write: user-owned files in home + tmp
+  owner @{HOME}/** w,
+  /tmp/** rwkl,
+  /tmp/ r,
+
+  # Execute: common dev tools — inherit this profile.
+  # The HOME rule is owner-scoped, so files dropped by another user are still
+  # blocked. It covers ephemeral tool environments that a narrow allowlist
+  # cannot anticipate: pre-commit's ~/.cache/pre-commit/repo*/{py,node,ruby}_env-*,
+  # project .venv/.tox, node_modules/.bin, pyenv/uv/pipx/nvm/pnpm/cargo,
+  # docker CLI plugins under ~/.docker/cli-plugins, etc.
+  /usr/bin/** ix,
+  /usr/local/bin/** ix,
+  /bin/** ix,
+  /snap/bin/** ix,
+  /opt/** ix,
+  /usr/libexec/** ix,
+  owner @{HOME}/** ix,
+
+  # =============================================================
+  # NETWORK (Ollama LAN, provider APIs, git, docker, etc.)
+  # =============================================================
+
+  network inet stream,
+  network inet6 stream,
+  network inet dgram,
+  network inet6 dgram,
+  network unix stream,
+  network unix dgram,
+
+  # =============================================================
+  # DEVICES & LIBRARIES
+  # =============================================================
+
+  /dev/null rw,
+  /dev/urandom r,
+  /dev/random r,
+  /dev/tty rw,
+  /dev/pts/* rw,
+
+  # Nvidia GPU device nodes (nvidia-smi, CUDA, NVML-based tools).
+  # Without these, NVML fails with an opaque "Unknown Error" rather
+  # than a permission message, which is what made this hard to spot.
+  /dev/nvidiactl rw,
+  /dev/nvidia-uvm rw,
+  /dev/nvidia-uvm-tools rw,
+  /dev/nvidia-modeset rw,
+  /dev/nvidia[0-9]* rw,
+  /dev/nvidia-caps/* r,
+
+  # Container runtime sockets (CLI -> daemon).
+  # AppArmor mediates unix socket connect() as a write on the socket path,
+  # so the network rules above are not enough on their own.
+  /{var/,}run/docker.sock rw,
+  /{var/,}run/podman/podman.sock rw,
+
+  /usr/lib/** rm,
+  /lib/** rm,
+  /lib64/** rm,
+}

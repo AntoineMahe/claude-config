@@ -82,6 +82,23 @@ the same sandbox, which has two practical consequences worth calling out:
   the sockets, not all of `/run`). Rootless podman is the safer long-term
   answer if this matters to you.
 
+- **Nix.** `/nix/store` is outside `@{HOME}` and outside every path covered
+  by the base `ix` rules (`/usr/bin`, `/bin`, `/opt`, ...), so both
+  profiles carry explicit rules for it: `/nix/store/** ix,` to exec
+  Nix-installed binaries, and `/nix/var/nix/daemon-socket/socket rw,` for
+  the multi-user daemon socket (same reasoning as the docker/podman socket
+  rules above — reads already work via the blanket `/** r,`, only exec and
+  the socket needed adding). Because Nix store paths are content-addressed
+  hashes, the profile's own `deny /usr/bin/sudo x,`-style rules can't catch
+  a nixpkgs-provided `sudo`/`su`/`pkexec`/`apparmor_parser` — both profiles
+  mirror those denies under `/nix/store/*/bin/...` and `/nix/store/*/sbin/...`
+  to close that gap. Installing Nix itself still requires `sudo` and must be
+  run outside a Claude Code / pi session (`Bash(sudo:*)` is denied by
+  `settings.json`, and the AppArmor profile blocks `sudo` at the kernel
+  level too) — after installing, reload the profile
+  (`sudo apparmor_parser -r /etc/apparmor.d/claude-code`) and restart the
+  session to pick it up.
+
 ## Debugging
 
 ```bash

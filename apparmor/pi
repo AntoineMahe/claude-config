@@ -43,6 +43,16 @@ profile pi @{HOME}/.local/share/pi-node/*/bin/pi flags=(enforce) {
   deny /usr/sbin/aa-* x,
   deny /usr/sbin/apparmor_parser x,
 
+  # Nix store paths are content-addressed hashes, so the absolute-path
+  # denies above don't catch a nixpkgs-provided sudo/su/pkexec/apparmor
+  # tool. Close the same gap there.
+  deny /nix/store/*/bin/sudo x,
+  deny /nix/store/*/bin/su x,
+  deny /nix/store/*/bin/pkexec x,
+  deny /nix/store/*/bin/aa-* x,
+  deny /nix/store/*/sbin/aa-* x,
+  deny /nix/store/*/sbin/apparmor_parser x,
+
   # =============================================================
   # PI RUNTIME
   # =============================================================
@@ -88,6 +98,11 @@ profile pi @{HOME}/.local/share/pi-node/*/bin/pi flags=(enforce) {
   /usr/libexec/** ix,
   owner @{HOME}/** ix,
 
+  # Nix (multi-user store). Root-owned and immutable — this profile can
+  # exec what's already built, but can't write new store paths itself;
+  # installs still go through the daemon (see socket rule below).
+  /nix/store/** ix,
+
   # =============================================================
   # NETWORK (Ollama LAN, provider APIs, git, docker, etc.)
   # =============================================================
@@ -124,6 +139,9 @@ profile pi @{HOME}/.local/share/pi-node/*/bin/pi flags=(enforce) {
   # so the network rules above are not enough on their own.
   /{var/,}run/docker.sock rw,
   /{var/,}run/podman/podman.sock rw,
+
+  # Nix daemon socket (multi-user install) — same reasoning as above.
+  /nix/var/nix/daemon-socket/socket rw,
 
   /usr/lib/** rm,
   /lib/** rm,

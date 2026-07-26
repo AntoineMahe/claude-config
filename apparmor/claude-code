@@ -44,6 +44,16 @@ profile claude-code @{HOME}/.local/share/claude/versions/* flags=(enforce) {
   deny /usr/sbin/aa-* x,
   deny /usr/sbin/apparmor_parser x,
 
+  # Nix store paths are content-addressed hashes, so the absolute-path
+  # denies above don't catch a nixpkgs-provided sudo/su/pkexec/apparmor
+  # tool. Close the same gap there.
+  deny /nix/store/*/bin/sudo x,
+  deny /nix/store/*/bin/su x,
+  deny /nix/store/*/bin/pkexec x,
+  deny /nix/store/*/bin/aa-* x,
+  deny /nix/store/*/sbin/aa-* x,
+  deny /nix/store/*/sbin/apparmor_parser x,
+
   # =============================================================
   # CLAUDE CODE RUNTIME
   # =============================================================
@@ -94,6 +104,11 @@ profile claude-code @{HOME}/.local/share/claude/versions/* flags=(enforce) {
   /usr/lib/git-core/** ix,
   owner @{HOME}/** ix,
 
+  # Nix (multi-user store). Root-owned and immutable — this profile can
+  # exec what's already built, but can't write new store paths itself;
+  # installs still go through the daemon (see socket rule below).
+  /nix/store/** ix,
+
   # =============================================================
   # NETWORK (Anthropic API, git, docker, etc.)
   # =============================================================
@@ -131,6 +146,9 @@ profile claude-code @{HOME}/.local/share/claude/versions/* flags=(enforce) {
   # Docker commands must be run by the human outside Claude Code sessions.
   deny /{var/,}run/docker.sock rw,
   deny /{var/,}run/podman/podman.sock rw,
+
+  # Nix daemon socket (multi-user install) — same reasoning as above.
+  /nix/var/nix/daemon-socket/socket rw,
 
   /usr/lib/** rm,
   /lib/** rm,

@@ -68,8 +68,10 @@ profile claude-code @{HOME}/.local/share/claude/versions/* flags=(enforce) {
   / r,
   /** r,
 
-  # Write: user-owned files in home + tmp
-  owner @{HOME}/** w,
+  # Write: user-owned files in home + tmp.
+  # `k` (file locking) is needed by sqlite-backed tools, e.g. pre-commit's
+  # ~/.cache/pre-commit/db.db — without it they fail with "database is locked".
+  owner @{HOME}/** wk,
   /tmp/** rwkl,
   /tmp/ r,
 
@@ -85,6 +87,10 @@ profile claude-code @{HOME}/.local/share/claude/versions/* flags=(enforce) {
   /snap/bin/** ix,
   /opt/** ix,
   /usr/libexec/** ix,
+  # git dispatches subcommands by exec'ing /usr/lib/git-core/git-<cmd>
+  # (worktree add/remove spawn git-branch, git-symbolic-ref, ...);
+  # without this only in-process builtins work.
+  /usr/lib/git-core/** ix,
   owner @{HOME}/** ix,
 
   # =============================================================

@@ -24,7 +24,9 @@ install.sh             # Installer — merges settings, installs AppArmor profil
 ```bash
 git clone <this-repo>
 cd claude-config
-./install.sh
+./install.sh            # both layers (default)
+./install.sh --settings # only merge settings.json deny rules
+./install.sh --apparmor # only install/reload the AppArmor profile
 ```
 
 The installer is safe to run on an existing Claude Code setup — it merges rather than overwrites:
@@ -70,12 +72,15 @@ the same sandbox, which has two practical consequences worth calling out:
   covered. Add a per-machine `owner /srv/myproj/** ix,` rule in
   `/etc/apparmor.d/local/claude-code` if you need it.
 
-- **Container runtime sockets.** `docker` and `podman` CLIs talk to their
-  daemons over a unix socket, which AppArmor mediates as a write on the
-  socket path. The profile explicitly allows
-  `/{var/,}run/docker.sock rw,` and `/{var/,}run/podman/podman.sock rw,`
-  — only the socket nodes themselves, not all of `/run`. The container
-  daemon runs under its own profile (`docker-default`) and is unaffected.
+- **Container runtime sockets are denied.** For a user in the `docker`
+  group, access to `docker.sock` is root-equivalent
+  (`docker run --privileged -v /:/host` bypasses the entire profile), so
+  the profile explicitly `deny`s the docker and podman sockets: container
+  commands must be run by the human, outside confined sessions. If your
+  workflow needs in-session containers and you accept the trade-off, use
+  the `docker-allowed` branch, which allows the two socket nodes (only
+  the sockets, not all of `/run`). Rootless podman is the safer long-term
+  answer if this matters to you.
 
 ## Debugging
 

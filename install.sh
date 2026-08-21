@@ -12,9 +12,29 @@ Components:
   --apparmor   Install and load the AppArmor profile (requires sudo)
   --all        Both (default when no component flag is given)
 
+Options:
+  --yes        Skip the confirmation prompt before modifying settings.json
+               (required for non-interactive runs that include --settings)
+
 The two layers are independent: settings.json is Claude's own (soft)
 deny list, the AppArmor profile is the kernel-enforced (hard) boundary.
 EOF
+}
+
+# Ask before touching the user's settings.json. Refuses (rather than
+# assumes yes) when there is no terminal to ask on, unless --yes was given.
+confirm() {
+    local prompt="$1"
+    if [[ $assume_yes -eq 1 ]]; then
+        return 0
+    fi
+    if [[ ! -t 0 ]]; then
+        echo "  No terminal to confirm on — skipping. Re-run with --yes to proceed." >&2
+        return 1
+    fi
+    local reply
+    read -r -p "$prompt [y/N] " reply
+    [[ "$reply" =~ ^[Yy]([Ee][Ss])?$ ]]
 }
 
 install_settings() {
@@ -26,7 +46,6 @@ install_settings() {
 
     if [[ -f "$dest" ]]; then
         if command -v jq &>/dev/null; then
-            echo "Merging deny rules into existing $dest"
             # Merge: combine deny arrays (deduplicate), preserve all other user settings
             local merged
             merged=$(jq -s '
@@ -37,6 +56,17 @@ install_settings() {
                     }
                 }
             ' "$dest" "$src")
+            if [[ "$merged" == "$(jq . "$dest")" ]]; then
+                echo "settings.json already contains all deny rules — nothing to do."
+                return
+            fi
+            echo "Deny rules to add to $dest:"
+            jq -r --slurpfile existing <(jq '.permissions.deny // []' "$dest") \
+                '(.permissions.deny // []) - $existing[0] | .[] | "  + " + .' "$src"
+            if ! confirm "Merge these deny rules into settings.json?"; then
+                echo "  Skipped settings.json — left unmodified."
+                return
+            fi
             cp "$dest" "$dest.bak"
             echo "  Backed up original -> $dest.bak"
             printf '%s\n' "$merged" > "$dest"
@@ -49,8 +79,12 @@ install_settings() {
             exit 1
         fi
     else
-        cp "$src" "$dest"
-        echo "Installed settings.json -> $dest"
+        if confirm "No existing settings.json — install $src as $dest?"; then
+            cp "$src" "$dest"
+            echo "Installed settings.json -> $dest"
+        else
+            echo "  Skipped settings.json — not installed."
+        fi
     fi
 }
 
@@ -95,12 +129,14 @@ EOF
 
 do_settings=0
 do_apparmor=0
+assume_yes=0
 
 for arg in "$@"; do
     case "$arg" in
         --settings) do_settings=1 ;;
         --apparmor) do_apparmor=1 ;;
         --all) do_settings=1; do_apparmor=1 ;;
+        --yes) assume_yes=1 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown option: $arg" >&2; usage >&2; exit 1 ;;
     esac

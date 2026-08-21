@@ -31,7 +31,7 @@ cd claude-config
 
 The installer is safe to run on an existing Claude Code setup — it merges rather than overwrites:
 
-- **`settings.json`** — merges deny rules into your existing config (deduplicates, preserves your other settings). Requires [`jq`](https://jqlang.github.io/jq/). Creates a `.bak` backup before modifying.
+- **`settings.json`** — shows the deny rules it would add and asks for confirmation before modifying anything (pass `--yes` to skip the prompt, e.g. for non-interactive runs). The merge deduplicates and preserves your other settings. Requires [`jq`](https://jqlang.github.io/jq/). Creates a `.bak` backup before modifying.
 - **AppArmor profile** — installs to `/etc/apparmor.d/claude-code` (requires `sudo`)
 - **Local overrides** — creates `/etc/apparmor.d/local/claude-code` template for per-machine deny rules (won't overwrite if it exists)
 

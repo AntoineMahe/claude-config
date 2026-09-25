@@ -96,8 +96,13 @@ the same sandbox, which has two practical consequences worth calling out:
 
   See [Rootless Docker setup](#rootless-docker-setup) below.
 
-  If you accept root-equivalence instead, the `docker-allowed` branch
-  allows the two rootful socket nodes; it is not recommended.
+  There is no supported variant that allows the rootful socket. A
+  `docker-allowed` branch used to exist for that and was **deleted in
+  September 2026**: it granted root-equivalence to anything running under
+  this profile, which is the one thing the profile is for, and the rootless
+  path above replaces it without the trade-off. If you genuinely need it,
+  add the rule in `/etc/apparmor.d/local/claude-code` on that machine —
+  a local, deliberate exception rather than a branch that drifts.
 
 - **Nix.** `/nix/store` is outside `@{HOME}` and outside every path covered
   by the base `ix` rules (`/usr/bin`, `/bin`, `/opt`, ...), so both

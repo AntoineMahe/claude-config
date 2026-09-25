@@ -2,6 +2,11 @@
 
 Hardening configuration for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — Anthropic's CLI agent.
 
+> **Install from `main`.** It is the tested branch. `develop` is where changes
+> land first and may reference setups that have run on only one machine. See
+> [CONTRIBUTING.md](CONTRIBUTING.md) for the branch model and what earns
+> scrutiny in a profile change.
+
 Claude Code is a powerful dev tool with broad filesystem access. This repo provides two independent layers of protection for sensitive files:
 
 1. **`settings.json`** — Claude Code's built-in permission deny rules. These tell Claude not to read/write certain paths. However, Claude *can* modify its own settings.

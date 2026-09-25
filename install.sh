@@ -5,16 +5,24 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
     cat <<'EOF'
-Usage: ./install.sh [--settings] [--apparmor] [--all] [-h|--help]
+Usage: ./install.sh [--settings] [--apparmor[=LIST]] [--all] [-h|--help]
 
 Components:
-  --settings   Merge Claude Code deny rules into ~/.claude/settings.json
-  --apparmor   Install and load the AppArmor profile (requires sudo)
-  --all        Both (default when no component flag is given)
+  --settings          Merge Claude Code deny rules into ~/.claude/settings.json
+  --apparmor[=LIST]   Install and load AppArmor profiles (sudo).
+                      No LIST        -> claude-code only (the default)
+                      =all           -> every profile in apparmor/
+                      =pi,claude-code-> just those, comma-separated
+  --all               settings + the default AppArmor set (claude-code)
 
 Options:
   --yes        Skip the confirmation prompt before modifying settings.json
                (required for non-interactive runs that include --settings)
+
+Profiles are opt-in per name because installing one you do not use is not
+free: it loads into the kernel, and a profile whose attach path does not
+match anything on this machine confines nothing while looking healthy in
+`aa-status`. List what you actually run.
 
 The two layers are independent: settings.json is Claude's own (soft)
 deny list, the AppArmor profile is the kernel-enforced (hard) boundary.
@@ -89,52 +97,82 @@ install_settings() {
 }
 
 install_apparmor() {
-    local dest="/etc/apparmor.d/claude-code"
-    local local_overrides="/etc/apparmor.d/local/claude-code"
-
     if ! command -v apparmor_parser &>/dev/null; then
         echo "AppArmor not available — skipping profile install."
         echo "  Install with: sudo apt install apparmor apparmor-utils"
         return
     fi
 
-    echo "Installing AppArmor profile (requires sudo)..."
-    sudo cp "$SCRIPT_DIR/apparmor/claude-code" "$dest"
-    echo "Installed AppArmor profile -> $dest"
+    # Which profiles to install: "all", or a comma-separated list of names.
+    # Defaults to claude-code. Named rather than automatic because the repo
+    # ships profiles for tools not everyone runs -- pi was added here and then
+    # silently never loaded, which is the failure this selection makes visible
+    # instead of papering over.
+    local -a names=()
+    local profile name dest local_overrides
+    if [[ "$apparmor_list" == "all" ]]; then
+        for profile in "$SCRIPT_DIR"/apparmor/*; do
+            [[ -f "$profile" ]] && names+=("$(basename "$profile")")
+        done
+    else
+        IFS=',' read -r -a names <<< "$apparmor_list"
+    fi
 
-    # Create local overrides file if it doesn't exist
-    if [[ ! -f "$local_overrides" ]]; then
-        sudo mkdir -p /etc/apparmor.d/local
-        sudo tee "$local_overrides" > /dev/null <<'EOF'
-# Per-machine deny rules for Claude Code
-# These are included by the main profile via: include if exists <local/claude-code>
+    for name in "${names[@]}"; do
+        profile="$SCRIPT_DIR/apparmor/$name"
+        if [[ ! -f "$profile" ]]; then
+            echo "No such profile: $name" >&2
+            echo "  Available: $(cd "$SCRIPT_DIR/apparmor" && echo *)" >&2
+            exit 1
+        fi
+        dest="/etc/apparmor.d/$name"
+        local_overrides="/etc/apparmor.d/local/$name"
+
+        echo "Installing AppArmor profile '$name' (requires sudo)..."
+        sudo cp "$profile" "$dest"
+        echo "  installed -> $dest"
+
+        # Per-machine overrides, one file per profile. Never overwritten: it
+        # holds rules this repo cannot know about.
+        if [[ ! -f "$local_overrides" ]]; then
+            sudo mkdir -p /etc/apparmor.d/local
+            sudo tee "$local_overrides" > /dev/null <<EOF
+# Per-machine rules for the '$name' profile.
+# Included by the main profile via: include if exists <local/$name>
 #
 # Examples (uncomment/adapt as needed):
 # deny @{HOME}/Documents/finances/** rwlk,
 # deny @{HOME}/private/** rwlk,
-# deny @{HOME}/.config/some-app/** rwlk,
+# owner /srv/myproject/** ix,
 EOF
-        echo "Created local overrides template -> $local_overrides"
-        echo "  Edit this file to add per-machine deny rules."
-    else
-        echo "Local overrides already exist at $local_overrides — not overwriting."
-    fi
+            echo "  created overrides template -> $local_overrides"
+        else
+            echo "  overrides already exist at $local_overrides — not overwriting."
+        fi
 
-    sudo apparmor_parser -r "$dest"
-    echo "AppArmor profile loaded (enforce mode)."
-    echo "  Restart Claude Code for it to take effect."
-    echo "  Debug: journalctl -k | grep DENIED"
-    echo "  Disable: sudo aa-complain $dest"
+        sudo apparmor_parser -r "$dest"
+        echo "  loaded (enforce mode)."
+    done
+
+    echo "Restart the confined tools for the profiles to take effect."
+    echo "  Verify: sudo aa-status"
+    echo "  Debug:  journalctl -k | grep DENIED"
+    echo "          (note: 'deny' rules are silent unless written 'audit deny',"
+    echo "           so an empty log does not prove nothing was denied)"
+    echo "  Relax:  sudo aa-complain /etc/apparmor.d/<name>"
 }
 
 do_settings=0
 do_apparmor=0
 assume_yes=0
+# Which profiles --apparmor installs. Overridden by --apparmor=LIST.
+apparmor_list="claude-code"
 
 for arg in "$@"; do
     case "$arg" in
         --settings) do_settings=1 ;;
         --apparmor) do_apparmor=1 ;;
+        --apparmor=*) do_apparmor=1; apparmor_list="${arg#--apparmor=}" ;;
         --all) do_settings=1; do_apparmor=1 ;;
         --yes) assume_yes=1 ;;
         -h|--help) usage; exit 0 ;;

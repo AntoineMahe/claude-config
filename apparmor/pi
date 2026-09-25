@@ -91,6 +91,14 @@ profile pi @{HOME}/.local/share/pi-node/*/bin/pi flags=(enforce) {
   # project .venv/.tox, node_modules/.bin, pyenv/uv/pipx/nvm/pnpm/cargo,
   # docker CLI plugins under ~/.docker/cli-plugins, etc.
   /usr/bin/** ix,
+
+  # Ubuntu 25.10+ replaced GNU coreutils with the Rust uutils build. /usr/bin/ls,
+  # cat, head, tail, cut, sort, wc, basename ... are now symlinks to a multi-call
+  # binary under /usr/lib/cargo/bin/coreutils/, and AppArmor matches the RESOLVED
+  # target, not the symlink. The /usr/lib/** rule below grants r+m but not x, so
+  # without this line every coreutil is denied while grep/sed/awk/find (still GNU,
+  # still in /usr/bin) keep working -- a confusing half-broken shell.
+  /usr/lib/cargo/bin/coreutils/** ix,
   /usr/local/bin/** ix,
   /bin/** ix,
   /snap/bin/** ix,

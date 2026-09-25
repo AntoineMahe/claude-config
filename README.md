@@ -75,12 +75,29 @@ the same sandbox, which has two practical consequences worth calling out:
 - **Container runtime sockets are denied.** For a user in the `docker`
   group, access to `docker.sock` is root-equivalent
   (`docker run --privileged -v /:/host` bypasses the entire profile), so
-  the profile explicitly `deny`s the docker and podman sockets: container
-  commands must be run by the human, outside confined sessions. If your
-  workflow needs in-session containers and you accept the trade-off, use
-  the `docker-allowed` branch, which allows the two socket nodes (only
-  the sockets, not all of `/run`). Rootless podman is the safer long-term
-  answer if this matters to you.
+  the profile explicitly `deny`s the rootful docker and podman sockets:
+  rootful container commands must be run by the human, outside confined
+  sessions.
+
+  The supported way to get in-session containers is a **rootless Docker
+  daemon owned by a dedicated service account**, whose socket the profile
+  allows. Container "root" maps to that unprivileged account, so
+  `--privileged` or `-v /:/host` yield at most its rights, and because the
+  account is not the developer, containers cannot read `~/.ssh` and friends
+  even through a bind mount. The allow rule is inert on machines without
+  the socket.
+
+  Because that socket is bound inside rootlesskit's private mount
+  namespace, its path is "disconnected" from this namespace and AppArmor
+  would deny the connect before consulting any rule; the profile therefore
+  carries the `attach_disconnected` flag (as `docker-default` does), which
+  mediates such paths as if rooted at `/`. Deny rules and the default deny
+  for unmatched paths still apply to them.
+
+  See [Rootless Docker setup](#rootless-docker-setup) below.
+
+  If you accept root-equivalence instead, the `docker-allowed` branch
+  allows the two rootful socket nodes; it is not recommended.
 
 - **Nix.** `/nix/store` is outside `@{HOME}` and outside every path covered
   by the base `ix` rules (`/usr/bin`, `/bin`, `/opt`, ...), so both
@@ -136,3 +153,174 @@ cp ~/.claude/settings.json.bak ~/.claude/settings.json
 ## License
 
 GPLv3 — see [LICENSE](LICENSE).
+
+## Rootless Docker setup
+
+This is the configuration the profile's container-socket allow rule expects.
+It is written to be reusable: **every name here is a local choice**, and the
+profile does not hard-code any of them.
+
+### What you are building, and why
+
+A second Docker daemon, owned by a service account that is **not** your user.
+Containers it starts have their "root" mapped into that account's subordinate
+uid range, so the worst a container escape reaches is an unprivileged account
+with no access to your home directory. That is what makes allowing this socket
+a different proposition from allowing `/var/run/docker.sock`, where membership
+of the `docker` group is root-equivalent.
+
+### 1. The service account
+
+```
+sudo adduser --disabled-password --gecos "" --home /srv/<account> <account>
+```
+
+`adduser` allocates the subordinate uid/gid ranges in `/etc/subuid` and
+`/etc/subgid` for you; confirm with `grep <account> /etc/sub[ug]id`. Without a
+range, rootlesskit cannot start.
+
+Pick the home directory outside `/home`. A service account cannot traverse a
+`drwxr-x---` home directory, so anything it must read — compose files, bind
+mounts — has to live somewhere it can reach.
+
+```
+sudo loginctl enable-linger <account>
+```
+
+**Not optional.** Without linger the account's systemd user manager, and with
+it the daemon, stops when the last session for that account ends.
+
+### 2. A group so you can reach the socket
+
+```
+sudo addgroup --system <group>
+```
+
+```
+sudo adduser <youruser> <group>
+```
+
+```
+sudo adduser <account> <group>
+```
+
+Use the two-argument `adduser` form, or `usermod -aG`. Never `usermod -G`
+without `-a`: it *replaces* the supplementary group list, which can drop your
+own account out of `sudo` in one stroke.
+
+Group membership is fixed at login. After this, log out and back in — and note
+that on GNOME, opening a new terminal window is **not** a new login, because
+every window inherits the credentials `gnome-terminal-server` acquired when the
+session started.
+
+### 3. Install the daemon as that account
+
+```
+sudo -u <account> env HOME=/srv/<account> XDG_RUNTIME_DIR=/run/user/$(id -u <account>) dockerd-rootless-setuptool.sh install
+```
+
+The `sudo` here switches identity only. The daemon it installs is unprivileged;
+nothing about this grants it extra rights.
+
+### 4. Put the socket somewhere reachable
+
+By default the daemon listens on `/run/user/<uid>/docker.sock`. That directory
+is mode `0700` and owned by the service account, so **your user cannot reach it
+no matter what the AppArmor profile permits**. The fix is a stable path outside
+the runtime directory.
+
+Add to the daemon's own `daemon.json` (at `/srv/<account>/.config/docker/`):
+
+```json
+{
+  "hosts": ["unix:///srv/<account>/docker.sock"]
+}
+```
+
+then make the directory traversable and the socket group-writable:
+
+```
+sudo chown <account>:<group> /srv/<account>
+```
+
+```
+sudo chmod 750 /srv/<account>
+```
+
+The socket itself is recreated on every daemon start, so set its group through
+the daemon rather than with a one-off `chmod`:
+
+```
+sudo -u <account> mkdir -p /srv/<account>/.config/systemd/user/docker.service.d
+```
+
+with a drop-in that runs `chgrp <group>` and `chmod 660` on the socket after
+start (`ExecStartPost=`). A one-off `chmod` is lost at the next restart, which
+is the kind of failure that looks intermittent.
+
+### 5. Point the profile at it
+
+If your directory is one of the defaults in `@{CLAUDE_DOCKER_DIRS}`
+(`/srv/claude-docker`, `/srv/docker`), nothing to do. Otherwise:
+
+```
+sudo mkdir -p /etc/apparmor.d/tunables/claude-code.d
+```
+
+```
+echo '@{CLAUDE_DOCKER_DIRS}+=/srv/<account>' | sudo tee /etc/apparmor.d/tunables/claude-code.d/local
+```
+
+```
+sudo apparmor_parser -r /etc/apparmor.d/claude-code
+```
+
+`+=` extends the defaults; a plain `=` replaces them and silently drops the
+paths that were working.
+
+### 6. Select it
+
+```
+docker context create <name> --docker host=unix:///srv/<account>/docker.sock
+```
+
+```
+docker context use <name>
+```
+
+Or set `DOCKER_HOST=unix:///srv/<account>/docker.sock` per session.
+
+### 7. Verify
+
+```
+docker info --format '{{.DockerRootDir}} {{.SecurityOptions}}'
+```
+
+`SecurityOptions` must contain `rootless`. If `DockerRootDir` is
+`/var/lib/docker` you are talking to the rootful daemon and none of the above
+is in effect — check this **every time** before running anything that writes,
+because restoring volumes into the wrong daemon fails silently: they are
+created, they are simply invisible to the stacks that need them.
+
+```
+journalctl -k --since '5 min ago' | grep DENIED
+```
+
+Run a container from inside a confined Claude Code session; an AppArmor denial
+on the socket path shows up here. If you see one naming a path that looks
+correct, the usual cause is a missing `attach_disconnected` on the profile.
+
+### Limitations, so they are not discovered later
+
+- **No privileged containers and no host devices.** GPU access is possible but
+  needs `no-cgroups = true` in `/etc/nvidia-container-runtime/config.toml`,
+  which is a host-wide setting affecting the rootful daemon too.
+- **Ports below 1024 need a capability**, not a sysctl:
+  `sudo setcap cap_net_bind_service=ep /usr/bin/rootlesskit`. A Docker package
+  upgrade replaces that binary and drops the capability, after which a
+  container that binds 80 fails with no obvious cause. `getcap` is the check.
+- **`network_mode: host`** is rootlesskit's namespace, not the real host.
+- **A separate image store.** Images pulled by the rootful daemon are not
+  visible here, and vice versa.
+- **Bind mounts reach only what the service account can read**, which is the
+  point, and which is why compose trees belong somewhere both accounts share.

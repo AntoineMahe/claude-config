@@ -16,7 +16,24 @@ abi <abi/4.0>,
 
 include <tunables/global>
 
-profile claude-code @{HOME}/.local/share/claude/versions/* flags=(enforce) {
+# Where the rootless Docker daemon's socket lives. Several defaults are
+# listed because the service account's name is a local choice; a rule that
+# names a directory which does not exist on this machine is inert, so
+# shipping more than one costs nothing.
+#
+# To add a path without editing this file, drop a line into
+# /etc/apparmor.d/tunables/claude-code.d/local :
+#
+#     @{CLAUDE_DOCKER_DIRS}+=/srv/myaccount
+#
+# Use += , not = : plain assignment replaces the defaults instead of
+# extending them, which silently drops the socket you were already using.
+@{CLAUDE_DOCKER_DIRS}=/srv/claude-docker /srv/docker
+include if exists <tunables/claude-code.d>
+
+# attach_disconnected: needed to reach the rootless Docker socket, which is
+# bound in another mount namespace (see the Docker section below).
+profile claude-code @{HOME}/.local/share/claude/versions/* flags=(enforce, attach_disconnected) {
   include <abstractions/base>
   include <abstractions/nameservice>
 
@@ -93,6 +110,14 @@ profile claude-code @{HOME}/.local/share/claude/versions/* flags=(enforce) {
   # project .venv/.tox, node_modules/.bin, pyenv/uv/pipx/nvm/pnpm/cargo,
   # docker CLI plugins under ~/.docker/cli-plugins, etc.
   /usr/bin/** ix,
+
+  # Ubuntu 25.10+ replaced GNU coreutils with the Rust uutils build. /usr/bin/ls,
+  # cat, head, tail, cut, sort, wc, basename ... are now symlinks to a multi-call
+  # binary under /usr/lib/cargo/bin/coreutils/, and AppArmor matches the RESOLVED
+  # target, not the symlink. The /usr/lib/** rule below grants r+m but not x, so
+  # without this line every coreutil is denied while grep/sed/awk/find (still GNU,
+  # still in /usr/bin) keep working -- a confusing half-broken shell.
+  /usr/lib/cargo/bin/coreutils/** ix,
   /usr/local/bin/** ix,
   /bin/** ix,
   /snap/bin/** ix,
@@ -140,12 +165,19 @@ profile claude-code @{HOME}/.local/share/claude/versions/* flags=(enforce) {
   /dev/nvidia[0-9]* rw,
   /dev/nvidia-caps/* r,
 
-  # Container runtime sockets are deliberately NOT allowed: the user is in
-  # the docker group, so docker.sock access is root-equivalent
+  # Rootful container runtime sockets are deliberately NOT allowed: the
+  # user is in the docker group, so docker.sock access is root-equivalent
   # (docker run --privileged -v /:/host bypasses this entire profile).
-  # Docker commands must be run by the human outside Claude Code sessions.
   deny /{var/,}run/docker.sock rw,
   deny /{var/,}run/podman/podman.sock rw,
+
+  # Rootless daemon of a dedicated service account: NOT root-equivalent,
+  # because container "root" maps to that unprivileged account rather than
+  # to real root. Needs attach_disconnected (the socket is bound in
+  # rootlesskit's mount namespace). Paths come from @{CLAUDE_DOCKER_DIRS}
+  # at the top of this file; see the README to add your own.
+  @{CLAUDE_DOCKER_DIRS}/ r,
+  @{CLAUDE_DOCKER_DIRS}/docker.sock rw,
 
   # Nix daemon socket (multi-user install) — same reasoning as above.
   /nix/var/nix/daemon-socket/socket rw,
